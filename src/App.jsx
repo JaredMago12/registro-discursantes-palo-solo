@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { LogOut, LogIn, Download, Trash2, ChevronDown, MapPin, Phone, Clock3, AlertCircle, Search, X } from 'lucide-react';
+import { LogOut, LogIn, Download, Trash2, ChevronDown, MapPin, Phone, Clock3, AlertCircle, Search, X, Edit2, Check, Filter, FileText, Bell, BellOff, Moon, Sun } from 'lucide-react';
 import * as XLSX from 'xlsx';
 
 const STORAGE_KEY = 'palo-solo:registro-discursantes';
@@ -242,6 +242,90 @@ function nuevoId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function sugerirProximoDiscursante(fecha, salidas) {
+  if (!fecha) return null;
+  
+  const salidasOrdenadas = [...salidas].sort((a, b) => b.fecha.localeCompare(a.fecha));
+  const ultimaSalida = salidasOrdenadas.find(s => s.fecha <= fecha);
+  
+  if (!ultimaSalida) return ROSTER[0];
+  
+  const ultimoIndex = ROSTER.findIndex(r => r.nombre === ultimaSalida.discursante);
+  const siguienteIndex = (ultimoIndex + 1) % ROSTER.length;
+  
+  return ROSTER[siguienteIndex];
+}
+
+function obtenerProximosSabados(cantidad = 8) {
+  const fechas = [];
+  const hoy = new Date();
+  const dia = hoy.getDay();
+  const diasHastaSabado = (6 - dia + 7) % 7;
+  const primerSabado = new Date(hoy);
+  primerSabado.setDate(hoy.getDate() + diasHastaSabado);
+  
+  for (let i = 0; i < cantidad; i++) {
+    const fecha = new Date(primerSabado);
+    fecha.setDate(primerSabado.getDate() + (i * 7));
+    fechas.push(fecha.toISOString().slice(0, 10));
+  }
+  return fechas;
+}
+
+function obtenerDiscursanteProgramado(fecha, salidas) {
+  const salida = salidas.find(s => s.fecha === fecha);
+  if (salida) {
+    const speaker = ROSTER.find(r => r.nombre === salida.discursante);
+    return { ...salida, speaker };
+  }
+  return null;
+}
+
+function obtenerVisitaProgramada(fecha, visitas) {
+  return visitas.find(v => v.fecha === fecha) || null;
+}
+
+function obtenerNotificaciones(salidas, visitas) {
+  const hoy = new Date();
+  const notificaciones = [];
+  
+  salidas.forEach(s => {
+    const fechaSalida = new Date(s.fecha + 'T00:00:00');
+    const diffDias = Math.ceil((fechaSalida - hoy) / (1000 * 60 * 60 * 24));
+    
+    if (diffDias >= 0 && diffDias <= 7) {
+      const speaker = ROSTER.find(r => r.nombre === s.discursante);
+      notificaciones.push({
+        tipo: 'salida',
+        fecha: s.fecha,
+        discursante: s.discursante,
+        discurso: s.discursoTitulo || 'Sin discurso asignado',
+        congregacion: s.congregacion || 'Sin congregación',
+        dias: diffDias,
+        turno: speaker ? speaker.turno : null
+      });
+    }
+  });
+  
+  visitas.forEach(v => {
+    const fechaVisita = new Date(v.fecha + 'T00:00:00');
+    const diffDias = Math.ceil((fechaVisita - hoy) / (1000 * 60 * 60 * 24));
+    
+    if (diffDias >= 0 && diffDias <= 7) {
+      notificaciones.push({
+        tipo: 'visita',
+        fecha: v.fecha,
+        nombre: v.nombre,
+        discurso: v.discursoTitulo || 'Sin discurso asignado',
+        congregacion: v.congregacion || 'Sin congregación',
+        dias: diffDias
+      });
+    }
+  });
+  
+  return notificaciones.sort((a, b) => a.dias - b.dias);
+}
+
 function TalkPicker({ value, onChange, placeholder }) {
   const [query, setQuery] = useState(value ? `${value.num} — ${value.titulo}` : '');
   const [open, setOpen] = useState(false);
@@ -313,9 +397,17 @@ export default function RegistroDiscursantesPaloSolo() {
   const [error, setError] = useState(null);
   const [tab, setTab] = useState('salidas');
   const [infoOpen, setInfoOpen] = useState(false);
+  const [notificacionesAbiertas, setNotificacionesAbiertas] = useState(false);
   const [confirmId, setConfirmId] = useState(null);
+  const [editingId, setEditingId] = useState(null);
   const [salidaForm, setSalidaForm] = useState(emptySalidaForm());
   const [visitaForm, setVisitaForm] = useState(emptyVisitaForm());
+  const [filtroSalidas, setFiltroSalidas] = useState({ busqueda: '', mes: '' });
+  const [filtroVisitas, setFiltroVisitas] = useState({ busqueda: '', mes: '' });
+  const [temaOscuro, setTemaOscuro] = useState(() => {
+    const saved = localStorage.getItem('tema-oscuro');
+    return saved ? JSON.parse(saved) : false;
+  });
 
   const load = useCallback(async (silent) => {
     try {
@@ -346,6 +438,34 @@ export default function RegistroDiscursantesPaloSolo() {
   useEffect(() => {
     load(false);
   }, [load]);
+
+  useEffect(() => {
+    localStorage.setItem('tema-oscuro', JSON.stringify(temaOscuro));
+    const root = document.documentElement;
+    if (temaOscuro) {
+      root.style.setProperty('--bg', '#1a1f1e');
+      root.style.setProperty('--surface', '#2a302e');
+      root.style.setProperty('--surface-2', '#1f2624');
+      root.style.setProperty('--ink', '#e8edeb');
+      root.style.setProperty('--ink-soft', '#a8b3ae');
+      root.style.setProperty('--ink-faint', '#7a8780');
+      root.style.setProperty('--line', '#3a4540');
+      root.style.setProperty('--amber-tint', '#3a2a1a');
+      root.style.setProperty('--sage-tint', '#1a2a24');
+      root.style.setProperty('--danger-tint', '#2a1a1a');
+    } else {
+      root.style.setProperty('--bg', '#EEF3EF');
+      root.style.setProperty('--surface', '#FFFFFF');
+      root.style.setProperty('--surface-2', '#F6F9F7');
+      root.style.setProperty('--ink', '#1F2A24');
+      root.style.setProperty('--ink-soft', '#5C6B62');
+      root.style.setProperty('--ink-faint', '#93A099');
+      root.style.setProperty('--line', '#DCE3DE');
+      root.style.setProperty('--amber-tint', '#FBEDD8');
+      root.style.setProperty('--sage-tint', '#E3EEE6');
+      root.style.setProperty('--danger-tint', '#F7E3DD');
+    }
+  }, [temaOscuro]);
 
   const speakerInfo = useMemo(() => ROSTER.find((r) => r.nombre === salidaForm.discursante), [salidaForm.discursante]);
   const speakerPreparados = useMemo(
@@ -390,10 +510,99 @@ export default function RegistroDiscursantesPaloSolo() {
     else await persist({ ...data, visitas: data.visitas.filter((e) => e.id !== id) });
   };
 
+  const handleEdit = (tipo, item) => {
+    setEditingId(item.id);
+    if (tipo === 'salidas') {
+      const speaker = ROSTER.find(r => r.nombre === item.discursante);
+      const discurso = item.discursoNum ? { num: parseInt(item.discursoNum), titulo: item.discursoTitulo } : null;
+      setSalidaForm({
+        fecha: item.fecha,
+        discursante: item.discursante,
+        discurso: discurso,
+        congregacion: item.congregacion || ''
+      });
+    } else {
+      const discurso = item.discursoNum ? { num: parseInt(item.discursoNum), titulo: item.discursoTitulo } : null;
+      setVisitaForm({
+        fecha: item.fecha,
+        nombre: item.nombre,
+        congregacion: item.congregacion || '',
+        discurso: discurso
+      });
+    }
+  };
+
+  const handleUpdateSalida = async () => {
+    if (!salidaForm.discursante || !salidaForm.fecha || saving) return;
+    const updated = {
+      id: editingId,
+      fecha: salidaForm.fecha,
+      turno: speakerInfo ? speakerInfo.turno : null,
+      discursante: salidaForm.discursante,
+      discursoNum: salidaForm.discurso ? salidaForm.discurso.num : '',
+      discursoTitulo: salidaForm.discurso ? salidaForm.discurso.titulo : '',
+      congregacion: salidaForm.congregacion.trim(),
+      registradoTs: Date.now(),
+    };
+    await persist({ ...data, salidas: data.salidas.map(e => e.id === editingId ? updated : e) });
+    setEditingId(null);
+    setSalidaForm(emptySalidaForm());
+  };
+
+  const handleUpdateVisita = async () => {
+    if (!visitaForm.nombre.trim() || !visitaForm.fecha || saving) return;
+    const updated = {
+      id: editingId,
+      fecha: visitaForm.fecha,
+      nombre: visitaForm.nombre.trim(),
+      congregacion: visitaForm.congregacion.trim(),
+      discursoNum: visitaForm.discurso ? visitaForm.discurso.num : '',
+      discursoTitulo: visitaForm.discurso ? visitaForm.discurso.titulo : '',
+      registradoTs: Date.now(),
+    };
+    await persist({ ...data, visitas: data.visitas.map(e => e.id === editingId ? updated : e) });
+    setEditingId(null);
+    setVisitaForm(emptyVisitaForm());
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+    setSalidaForm(emptySalidaForm());
+    setVisitaForm(emptyVisitaForm());
+  };
+
+  const handleExportarPDF = () => {
+    window.print();
+  };
+
   const handleDescargar = () => {
     const wb = XLSX.utils.book_new();
 
-    const salidasOrdenadas = [...data.salidas].sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const salidasFiltradas = data.salidas.filter(e => {
+      const busqueda = filtroSalidas.busqueda.toLowerCase();
+      const mes = filtroSalidas.mes;
+      const fechaMes = e.fecha.slice(0, 7);
+      const coincideBusqueda = !busqueda || 
+        e.discursante.toLowerCase().includes(busqueda) ||
+        e.congregacion.toLowerCase().includes(busqueda) ||
+        e.discursoTitulo.toLowerCase().includes(busqueda);
+      const coincideMes = !mes || fechaMes === mes;
+      return coincideBusqueda && coincideMes;
+    });
+
+    const visitasFiltradas = data.visitas.filter(e => {
+      const busqueda = filtroVisitas.busqueda.toLowerCase();
+      const mes = filtroVisitas.mes;
+      const fechaMes = e.fecha.slice(0, 7);
+      const coincideBusqueda = !busqueda || 
+        e.nombre.toLowerCase().includes(busqueda) ||
+        e.congregacion.toLowerCase().includes(busqueda) ||
+        e.discursoTitulo.toLowerCase().includes(busqueda);
+      const coincideMes = !mes || fechaMes === mes;
+      return coincideBusqueda && coincideMes;
+    });
+
+    const salidasOrdenadas = [...salidasFiltradas].sort((a, b) => a.fecha.localeCompare(b.fecha));
     const headerSalidas = ['Fecha', 'Discurso #', 'Titulo discurso', 'Congregación', ...ROSTER.map((r) => r.nombre)];
     const filasSalidas = salidasOrdenadas.map((e) => {
       const row = [fechaLegible(e.fecha), e.discursoNum || '', e.discursoTitulo || '', e.congregacion || ''];
@@ -404,7 +613,7 @@ export default function RegistroDiscursantesPaloSolo() {
     wsSalidas['!cols'] = [{ wch: 11 }, { wch: 10 }, { wch: 34 }, { wch: 16 }, ...ROSTER.map(() => ({ wch: 14 }))];
     XLSX.utils.book_append_sheet(wb, wsSalidas, 'Salidas');
 
-    const visitasOrdenadas = [...data.visitas].sort((a, b) => a.fecha.localeCompare(b.fecha));
+    const visitasOrdenadas = [...visitasFiltradas].sort((a, b) => a.fecha.localeCompare(b.fecha));
     const headerVisitas = ['Fecha', '#', 'Número y Titulo discurso', 'Congregación', 'Discursante'];
     const filasVisitas = visitasOrdenadas.map((e) => [fechaLegible(e.fecha), e.discursoNum || '', e.discursoTitulo || '', e.congregacion || '', e.nombre || '']);
     const wsVisitas = XLSX.utils.aoa_to_sheet([headerVisitas, ...filasVisitas]);
@@ -419,8 +628,41 @@ export default function RegistroDiscursantesPaloSolo() {
     XLSX.writeFile(wb, `registro-discursantes-palo-solo-${fecha}.xlsx`);
   };
 
-  const salidasList = [...data.salidas].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.registradoTs - a.registradoTs);
-  const visitasList = [...data.visitas].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.registradoTs - a.registradoTs);
+  const salidasFiltradas = data.salidas.filter(e => {
+    const busqueda = filtroSalidas.busqueda.toLowerCase();
+    const mes = filtroSalidas.mes;
+    const fechaMes = e.fecha.slice(0, 7);
+    const coincideBusqueda = !busqueda || 
+      e.discursante.toLowerCase().includes(busqueda) ||
+      e.congregacion.toLowerCase().includes(busqueda) ||
+      e.discursoTitulo.toLowerCase().includes(busqueda);
+    const coincideMes = !mes || fechaMes === mes;
+    return coincideBusqueda && coincideMes;
+  });
+
+  const visitasFiltradas = data.visitas.filter(e => {
+    const busqueda = filtroVisitas.busqueda.toLowerCase();
+    const mes = filtroVisitas.mes;
+    const fechaMes = e.fecha.slice(0, 7);
+    const coincideBusqueda = !busqueda || 
+      e.nombre.toLowerCase().includes(busqueda) ||
+      e.congregacion.toLowerCase().includes(busqueda) ||
+      e.discursoTitulo.toLowerCase().includes(busqueda);
+    const coincideMes = !mes || fechaMes === mes;
+    return coincideBusqueda && coincideMes;
+  });
+
+  const mesesDisponibles = () => {
+    const meses = new Set();
+    data.salidas.forEach(s => meses.add(s.fecha.slice(0, 7)));
+    data.visitas.forEach(v => meses.add(v.fecha.slice(0, 7)));
+    return Array.from(meses).sort();
+  };
+
+  const salidasList = [...salidasFiltradas].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.registradoTs - a.registradoTs);
+  const visitasList = [...visitasFiltradas].sort((a, b) => b.fecha.localeCompare(a.fecha) || b.registradoTs - a.registradoTs);
+
+  const sugerido = salidaForm.fecha ? sugerirProximoDiscursante(salidaForm.fecha, data.salidas) : null;
 
   return (
     <div className="rd-root">
@@ -431,37 +673,41 @@ export default function RegistroDiscursantesPaloSolo() {
           --ink-faint:#93A099;--amber:#D98E2B;--amber-dark:#B9721A;--amber-tint:#FBEDD8;
           --sage:#4C7A5E;--sage-dark:#3A5F49;--sage-tint:#E3EEE6;--line:#DCE3DE;--danger:#B3452D;--danger-tint:#F7E3DD;
           font-family:'Inter',sans-serif;background:var(--bg);color:var(--ink);min-height:100vh;padding:18px 12px 56px;
+          transition:background 0.3s ease,color 0.3s ease;
         }
         .rd-container{max-width:720px;margin:0 auto;}
         .rd-header{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:6px;flex-wrap:wrap;}
         .rd-title{font-family:'Fraunces',serif;font-weight:700;font-size:24px;letter-spacing:-0.01em;margin:0;}
         .rd-sub{font-size:12.5px;color:var(--ink-soft);margin-top:2px;}
-        .rd-info-toggle{font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border:none;border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:5px;flex-shrink:0;}
-        .rd-info-panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0 16px;font-size:13px;color:var(--ink-soft);display:flex;flex-direction:column;gap:6px;}
+        .rd-info-toggle{font-family:'Inter',sans-serif;font-size:12.5px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border:none;border-radius:8px;padding:8px 10px;cursor:pointer;display:flex;align-items:center;gap:5px;flex-shrink:0;transition:background 0.3s ease,color 0.3s ease;}
+        .rd-info-panel{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin:10px 0 16px;font-size:13px;color:var(--ink-soft);display:flex;flex-direction:column;gap:6px;transition:background 0.3s ease,border-color 0.3s ease;}
         .rd-info-row{display:flex;align-items:flex-start;gap:8px;}
         .rd-info-row a{color:var(--sage-dark);font-weight:600;text-decoration:none;}
-        .rd-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px;}
+        .rd-card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:16px;transition:background 0.3s ease,border-color 0.3s ease;}
         .rd-field-row{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
         .rd-field{flex:1 1 160px;display:flex;flex-direction:column;gap:4px;min-width:0;}
         .rd-label{font-size:12px;font-weight:600;color:var(--ink-soft);}
-        .rd-input,.rd-select{font-family:'Inter',sans-serif;font-size:15px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);outline:none;width:100%;box-sizing:border-box;}
+        .rd-input,.rd-select{font-family:'Inter',sans-serif;font-size:15px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface-2);color:var(--ink);outline:none;width:100%;box-sizing:border-box;transition:background 0.3s ease,color 0.3s ease,border-color 0.3s ease;}
         .rd-input:focus-visible,.rd-select:focus-visible{border-color:var(--amber);background:var(--surface);box-shadow:0 0 0 3px var(--amber-tint);}
-        .rd-turno-badge{display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border-radius:6px;padding:2px 7px;margin-top:2px;}
-        .rd-btn-primary{width:100%;font-family:'Inter',sans-serif;font-weight:700;font-size:15px;padding:13px 16px;background:var(--amber);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;}
+        .rd-turno-badge{display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border-radius:6px;padding:2px 7px;margin-top:2px;transition:background 0.3s ease,color 0.3s ease;}
+        .rd-btn-primary{width:100%;font-family:'Inter',sans-serif;font-weight:700;font-size:15px;padding:13px 16px;background:var(--amber);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.3s ease,opacity 0.3s ease;}
         .rd-btn-primary:hover:not(:disabled){background:var(--amber-dark);}
         .rd-btn-primary:disabled{opacity:.5;cursor:not-allowed;}
         .rd-btn-primary.sage{background:var(--sage);}
         .rd-btn-primary.sage:hover:not(:disabled){background:var(--sage-dark);}
         .rd-btn-primary:focus-visible{outline:3px solid var(--amber-dark);outline-offset:2px;}
-        .rd-tabs{display:flex;gap:8px;margin-bottom:12px;}
-        .rd-tab{flex:1;font-family:'Inter',sans-serif;font-weight:600;font-size:13.5px;padding:10px 6px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);cursor:pointer;}
+        .rd-btn-secondary{width:100%;font-family:'Inter',sans-serif;font-weight:700;font-size:15px;padding:13px 16px;background:var(--ink);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;transition:background 0.3s ease;}
+        .rd-btn-secondary:hover:not(:disabled){background:#0f1712;}
+        .rd-btn-secondary:disabled{opacity:.5;cursor:not-allowed;}
+        .rd-tabs{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}
+        .rd-tab{flex:1;min-width:80px;font-family:'Inter',sans-serif;font-weight:600;font-size:13px;padding:10px 6px;border-radius:10px;border:1px solid var(--line);background:var(--surface);color:var(--ink-soft);cursor:pointer;transition:background 0.3s ease,color 0.3s ease,border-color 0.3s ease;}
         .rd-tab.active{background:var(--sage);color:#fff;border-color:var(--sage);}
         .rd-tab:focus-visible{outline:3px solid var(--sage-dark);outline-offset:2px;}
         .rd-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;}
-        .rd-chip{font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border:1px solid transparent;border-radius:999px;padding:6px 10px;cursor:pointer;text-align:left;max-width:100%;}
+        .rd-chip{font-family:'Inter',sans-serif;font-size:12px;font-weight:600;color:var(--sage-dark);background:var(--sage-tint);border:1px solid transparent;border-radius:999px;padding:6px 10px;cursor:pointer;text-align:left;max-width:100%;transition:background 0.3s ease,color 0.3s ease,border-color 0.3s ease;}
         .rd-chip:hover{border-color:var(--sage);}
         .rd-chip-hint{font-size:11.5px;color:var(--ink-faint);margin-bottom:4px;}
-        .rd-picker-list{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 20px rgba(31,42,36,0.12);z-index:20;max-height:260px;overflow-y:auto;}
+        .rd-picker-list{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--surface);border:1px solid var(--line);border-radius:10px;box-shadow:0 8px 20px rgba(31,42,36,0.12);z-index:20;max-height:260px;overflow-y:auto;transition:background 0.3s ease,border-color 0.3s ease;}
         .rd-picker-item{display:flex;align-items:flex-start;gap:8px;width:100%;text-align:left;padding:9px 10px;background:transparent;border:none;border-bottom:1px solid var(--line);cursor:pointer;}
         .rd-picker-item:last-child{border-bottom:none;}
         .rd-picker-item:hover{background:var(--surface-2);}
@@ -471,38 +717,111 @@ export default function RegistroDiscursantesPaloSolo() {
         .rd-picker-empty{padding:12px;font-size:13px;color:var(--ink-faint);text-align:center;}
         .rd-picker-clear{position:absolute;right:6px;top:6px;background:transparent;border:none;color:var(--ink-faint);cursor:pointer;padding:6px;border-radius:6px;}
         .rd-picker-clear:hover{color:var(--danger);}
-        .rd-row{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;flex-wrap:wrap;}
+        .rd-row{display:flex;align-items:center;gap:10px;padding:12px 14px;background:var(--surface);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;flex-wrap:wrap;transition:background 0.3s ease,border-color 0.3s ease;}
         .rd-row-main{flex:1 1 180px;min-width:0;}
         .rd-row-name{font-weight:700;font-size:14.5px;}
         .rd-row-sub{font-size:12.5px;color:var(--ink-soft);margin-top:1px;}
-        .rd-stamp{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--ink-soft);border:1px dashed var(--ink-faint);border-radius:6px;padding:3px 7px;white-space:nowrap;}
-        .rd-btn-icon{background:transparent;border:none;color:var(--ink-faint);cursor:pointer;padding:6px;border-radius:6px;display:flex;}
+        .rd-stamp{font-family:'IBM Plex Mono',monospace;font-size:12px;font-weight:600;color:var(--ink-soft);border:1px dashed var(--ink-faint);border-radius:6px;padding:3px 7px;white-space:nowrap;transition:color 0.3s ease,border-color 0.3s ease;}
+        .rd-btn-icon{background:transparent;border:none;color:var(--ink-faint);cursor:pointer;padding:6px;border-radius:6px;display:flex;transition:color 0.3s ease,background 0.3s ease;}
         .rd-btn-icon:hover{color:var(--danger);background:var(--danger-tint);}
         .rd-confirm{display:flex;align-items:center;gap:6px;}
         .rd-confirm-text{font-size:12px;color:var(--danger);font-weight:600;}
         .rd-confirm-btn{font-size:12px;font-weight:700;border:none;border-radius:6px;padding:5px 9px;cursor:pointer;}
-        .rd-empty{text-align:center;padding:28px 16px;color:var(--ink-soft);font-size:13.5px;background:var(--surface-2);border:1px dashed var(--line);border-radius:12px;}
-        .rd-footer{margin-top:18px;display:flex;justify-content:center;}
-        .rd-btn-download{font-family:'Inter',sans-serif;font-weight:700;font-size:14px;padding:12px 22px;background:var(--ink);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:8px;}
+        .rd-empty{text-align:center;padding:28px 16px;color:var(--ink-soft);font-size:13.5px;background:var(--surface-2);border:1px dashed var(--line);border-radius:12px;transition:color 0.3s ease,background 0.3s ease,border-color 0.3s ease;}
+        .rd-footer{margin-top:18px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap;}
+        .rd-btn-download{font-family:'Inter',sans-serif;font-weight:700;font-size:14px;padding:12px 22px;background:var(--ink);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:8px;transition:background 0.3s ease;}
         .rd-btn-download:hover{background:#0f1712;}
-        .rd-error{display:flex;align-items:center;gap:8px;background:var(--danger-tint);color:var(--danger);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px;font-weight:600;}
+        .rd-btn-pdf{font-family:'Inter',sans-serif;font-weight:700;font-size:14px;padding:12px 22px;background:var(--danger);color:#fff;border:none;border-radius:10px;cursor:pointer;display:flex;align-items:center;gap:8px;}
+        .rd-btn-pdf:hover{background:#8a2a1a;}
+        .rd-error{display:flex;align-items:center;gap:8px;background:var(--danger-tint);color:var(--danger);border-radius:10px;padding:10px 14px;font-size:13px;margin-bottom:14px;font-weight:600;transition:background 0.3s ease,color 0.3s ease;}
         .rd-saving{font-size:12px;color:var(--ink-faint);text-align:center;margin-top:8px;}
+        .rd-turno-grid{display:grid;grid-template-columns:repeat(auto-fill, minmax(100px, 1fr));gap:6px;margin-top:8px;}
+        .rd-turno-item{padding:8px 10px;border-radius:8px;text-align:center;font-size:13px;font-weight:500;transition:all 0.2s;border:2px solid var(--line);background:var(--surface-2);transition:background 0.3s ease,border-color 0.3s ease,color 0.3s ease;}
+        .rd-turno-item.siguiente{background:var(--amber-tint);border-color:var(--amber);font-weight:700;}
+        .rd-turno-item.seleccionado{background:var(--sage-tint);border-color:var(--sage);}
+        .rd-sugerencia{background:var(--sage-tint);padding:10px 14px;border-radius:8px;margin-bottom:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;transition:background 0.3s ease;}
+        .rd-calendario-item{display:flex;align-items:center;padding:12px 14px;margin-bottom:8px;background:var(--surface-2);border-radius:10px;border:1px solid var(--line);gap:12px;flex-wrap:wrap;transition:background 0.3s ease,border-color 0.3s ease;}
+        .rd-estadisticas-grid{display:grid;grid-template-columns:repeat(auto-fit, minmax(120px, 1fr));gap:10px;margin-bottom:16px;}
+        .rd-estadisticas-card{padding:14px;border-radius:10px;text-align:center;transition:background 0.3s ease;}
+        .rd-estadisticas-numero{font-size:28px;font-weight:700;}
+        .rd-estadisticas-label{font-size:12px;color:var(--ink-soft);}
+        .rd-meses-item{display:flex;justify-content:space-between;padding:4px 8px;border-bottom:1px solid var(--line);font-size:13px;transition:border-color 0.3s ease;}
+        .rd-filtros{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap;}
+        .rd-filtros input,.rd-filtros select{padding:8px 12px;border-radius:8px;border:1px solid var(--line);font-family:'Inter',sans-serif;font-size:13px;background:var(--surface-2);flex:1;min-width:120px;transition:background 0.3s ease,color 0.3s ease,border-color 0.3s ease;}
+        .rd-filtros input:focus,.rd-filtros select:focus{outline:2px solid var(--amber);border-color:var(--amber);}
+        @media print {
+          .rd-no-print{display:none!important;}
+          .rd-card{border:1px solid #ddd!important;box-shadow:none!important;}
+          .rd-root{background:#fff!important;padding:10px!important;}
+          .rd-row{background:#fff!important;border:1px solid #ccc!important;}
+          .rd-btn-icon,.rd-confirm{display:none!important;}
+          .rd-turno-badge{background:#f0f0f0!important;color:#333!important;}
+          .rd-stamp{border:1px solid #ccc!important;}
+          .rd-empty{background:#f9f9f9!important;}
+          .rd-tabs .rd-tab{background:#f0f0f0!important;color:#333!important;border:1px solid #ccc!important;}
+          .rd-tabs .rd-tab.active{background:#333!important;color:#fff!important;}
+        }
       `}</style>
 
       <div className="rd-container">
-        <div className="rd-header">
+        <div className="rd-header rd-no-print">
           <div>
             <h1 className="rd-title">Registro de Discursantes</h1>
             <div className="rd-sub">Congregación Palo Solo</div>
           </div>
-          <button className="rd-info-toggle" onClick={() => setInfoOpen((v) => !v)}>
-            <ChevronDown size={14} style={{ transform: infoOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
-            Info del salón
-          </button>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button 
+              className="rd-info-toggle" 
+              onClick={() => setTemaOscuro(!temaOscuro)}
+              style={{ background: temaOscuro ? 'var(--surface-2)' : 'var(--sage-tint)' }}
+              title={temaOscuro ? 'Modo claro' : 'Modo oscuro'}
+            >
+              {temaOscuro ? <Sun size={14} /> : <Moon size={14} />}
+            </button>
+            
+            <button 
+              className="rd-info-toggle" 
+              onClick={() => setNotificacionesAbiertas(!notificacionesAbiertas)}
+              style={{ position: 'relative' }}
+            >
+              {(() => {
+                const notifs = obtenerNotificaciones(data.salidas, data.visitas);
+                const pendientes = notifs.filter(n => n.dias <= 3).length;
+                return (
+                  <>
+                    {pendientes > 0 ? <Bell size={14} /> : <BellOff size={14} />}
+                    {pendientes > 0 && (
+                      <span style={{
+                        position: 'absolute',
+                        top: '-4px',
+                        right: '-4px',
+                        background: 'var(--danger)',
+                        color: '#fff',
+                        borderRadius: '50%',
+                        width: '18px',
+                        height: '18px',
+                        fontSize: '10px',
+                        fontWeight: '700',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center'
+                      }}>
+                        {pendientes}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
+            </button>
+            <button className="rd-info-toggle" onClick={() => setInfoOpen((v) => !v)}>
+              <ChevronDown size={14} style={{ transform: infoOpen ? 'rotate(180deg)' : 'none', transition: 'transform .15s' }} />
+              Info del salón
+            </button>
+          </div>
         </div>
 
         {infoOpen && (
-          <div className="rd-info-panel">
+          <div className="rd-info-panel rd-no-print">
             <div className="rd-info-row"><MapPin size={15} style={{ marginTop: 1 }} />
               <span>C. Benito Juárez #22, Colonia Palo Solo, 52778, Huixquilucan de Degollado, Méx.
                 {' '}<a href="https://maps.app.goo.gl/wx5GSCFr41RNDRKL7" target="_blank" rel="noreferrer">Ver en Google Maps</a>
@@ -513,16 +832,64 @@ export default function RegistroDiscursantesPaloSolo() {
           </div>
         )}
 
-        {error && <div className="rd-error"><AlertCircle size={16} />{error}</div>}
+        {notificacionesAbiertas && (
+          <div className="rd-info-panel rd-no-print" style={{ maxHeight: '300px', overflowY: 'auto' }}>
+            <div style={{ fontWeight: '600', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+              <span>🔔 Próximos eventos</span>
+              <button 
+                style={{ background: 'none', border: 'none', color: 'var(--ink-faint)', cursor: 'pointer' }}
+                onClick={() => setNotificacionesAbiertas(false)}
+              >
+                <X size={16} />
+              </button>
+            </div>
+            {(() => {
+              const notifs = obtenerNotificaciones(data.salidas, data.visitas);
+              if (notifs.length === 0) {
+                return <div style={{ color: 'var(--ink-faint)', fontSize: '13px' }}>No hay eventos próximos.</div>;
+              }
+              return notifs.map((n, i) => (
+                <div key={i} style={{
+                  padding: '8px',
+                  marginBottom: '6px',
+                  borderRadius: '6px',
+                  background: n.dias <= 3 ? 'var(--danger-tint)' : 'var(--surface-2)',
+                  border: n.dias <= 3 ? '1px solid var(--danger)' : '1px solid var(--line)',
+                  fontSize: '13px',
+                  transition: 'background 0.3s ease,border-color 0.3s ease'
+                }}>
+                  <div style={{ fontWeight: '600' }}>
+                    {n.tipo === 'salida' ? '🚀' : '👤'} {n.tipo === 'salida' ? n.discursante : n.nombre}
+                    {n.turno && <span className="rd-turno-badge" style={{ marginLeft: '6px' }}>Turno {n.turno}</span>}
+                  </div>
+                  <div style={{ color: 'var(--ink-soft)', fontSize: '12px' }}>
+                    {n.discurso} {n.congregacion && `· ${n.congregacion}`}
+                  </div>
+                  <div style={{ 
+                    fontSize: '11px', 
+                    color: n.dias <= 3 ? 'var(--danger)' : 'var(--ink-faint)',
+                    fontWeight: n.dias <= 3 ? '600' : '400'
+                  }}>
+                    {n.dias === 0 ? '¡HOY!' : `En ${n.dias} día${n.dias > 1 ? 's' : ''}`} ({fechaLegible(n.fecha)})
+                  </div>
+                </div>
+              ));
+            })()}
+          </div>
+        )}
 
-        <div className="rd-tabs">
-          <button className={`rd-tab ${tab === 'salidas' ? 'active' : ''}`} onClick={() => setTab('salidas')}>Discursantes que salen ({data.salidas.length})</button>
-          <button className={`rd-tab ${tab === 'visitas' ? 'active' : ''}`} onClick={() => setTab('visitas')}>Discursantes que nos visitan ({data.visitas.length})</button>
+        {error && <div className="rd-error rd-no-print"><AlertCircle size={16} />{error}</div>}
+
+        <div className="rd-tabs rd-no-print">
+          <button className={`rd-tab ${tab === 'salidas' ? 'active' : ''}`} onClick={() => setTab('salidas')}>🚀 Salen ({data.salidas.length})</button>
+          <button className={`rd-tab ${tab === 'visitas' ? 'active' : ''}`} onClick={() => setTab('visitas')}>👤 Visitan ({data.visitas.length})</button>
+          <button className={`rd-tab ${tab === 'calendario' ? 'active' : ''}`} onClick={() => setTab('calendario')}>📅 Calendario</button>
+          <button className={`rd-tab ${tab === 'estadisticas' ? 'active' : ''}`} onClick={() => setTab('estadisticas')}>📊 Estadísticas</button>
         </div>
 
         {tab === 'salidas' ? (
           <>
-            <div className="rd-card">
+            <div className="rd-card rd-no-print">
               <div className="rd-field-row">
                 <div className="rd-field">
                   <label className="rd-label" htmlFor="s-fecha">Fecha</label>
@@ -536,7 +903,70 @@ export default function RegistroDiscursantesPaloSolo() {
                     <option value="">Selecciona…</option>
                     {ROSTER.map((r) => <option key={r.nombre} value={r.nombre}>{r.turno}. {r.nombre}</option>)}
                   </select>
-                  {speakerInfo && <span className="rd-turno-badge">Turno {speakerInfo.turno} · {speakerInfo.rol}</span>}
+                  {speakerInfo && (
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '4px', flexWrap: 'wrap' }}>
+                      <span className="rd-turno-badge" style={{ fontSize: '16px', padding: '6px 14px' }}>
+                        🔄 Turno {speakerInfo.turno}
+                      </span>
+                      <span className="rd-turno-badge" style={{ background: 'var(--amber-tint)', color: 'var(--amber-dark)' }}>
+                        {speakerInfo.rol}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {salidaForm.fecha && sugerido && (
+                <div className="rd-sugerencia">
+                  <span style={{ fontSize: '20px' }}>💡</span>
+                  <span style={{ fontWeight: '600' }}>
+                    {salidaForm.discursante === sugerido.nombre ? (
+                      `✅ Turno correcto: ${sugerido.turno}. ${sugerido.nombre}`
+                    ) : (
+                      `🔄 Sugerencia: El siguiente turno es ${sugerido.turno}. ${sugerido.nombre}`
+                    )}
+                  </span>
+                  {salidaForm.discursante !== sugerido.nombre && (
+                    <button
+                      className="rd-chip"
+                      onClick={() => setSalidaForm({ ...salidaForm, discursante: sugerido.nombre, discurso: null })}
+                      style={{ marginLeft: 'auto' }}
+                    >
+                      Seleccionar sugerencia
+                    </button>
+                  )}
+                </div>
+              )}
+
+              <div style={{ marginBottom: '12px' }}>
+                <div style={{ fontWeight: '600', marginBottom: '6px', fontSize: '14px' }}>
+                  📋 Orden de turnos
+                </div>
+                <div className="rd-turno-grid">
+                  {ROSTER.map((r) => {
+                    const esSiguiente = sugerido && sugerido.nombre === r.nombre && salidaForm.fecha;
+                    const esSeleccionado = salidaForm.discursante === r.nombre;
+                    
+                    return (
+                      <div
+                        key={r.turno}
+                        className={`rd-turno-item ${esSiguiente ? 'siguiente' : ''} ${esSeleccionado && !esSiguiente ? 'seleccionado' : ''}`}
+                      >
+                        <div style={{ fontSize: '11px', color: 'var(--ink-faint)' }}>#{r.turno}</div>
+                        <div style={{ fontSize: '12px' }}>{r.nombre.split(' ')[0]}</div>
+                        {esSiguiente && (
+                          <div style={{ fontSize: '9px', color: 'var(--amber-dark)', fontWeight: '700', marginTop: '2px' }}>
+                            ⬅️ SIGUIENTE
+                          </div>
+                        )}
+                        {esSeleccionado && !esSiguiente && (
+                          <div style={{ fontSize: '9px', color: 'var(--sage-dark)', fontWeight: '600', marginTop: '2px' }}>
+                            ✅ SELECCIONADO
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -571,35 +1001,77 @@ export default function RegistroDiscursantesPaloSolo() {
                 </div>
               </div>
 
-              <button className="rd-btn-primary" onClick={handleRegistrarSalida} disabled={!salidaForm.discursante || saving}>
-                <LogOut size={18} /> Registrar salida
-              </button>
+              {editingId ? (
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button className="rd-btn-primary" onClick={handleUpdateSalida} disabled={!salidaForm.discursante || saving}>
+                    <Check size={18} /> Actualizar salida
+                  </button>
+                  <button className="rd-btn-secondary" onClick={handleCancelEdit} disabled={saving}>
+                    <X size={18} /> Cancelar
+                  </button>
+                </div>
+              ) : (
+                <button className="rd-btn-primary" onClick={handleRegistrarSalida} disabled={!salidaForm.discursante || saving}>
+                  <LogOut size={18} /> Registrar salida
+                </button>
+              )}
               {saving && <div className="rd-saving">Guardando…</div>}
             </div>
 
+            <div className="rd-filtros rd-no-print">
+              <input 
+                type="text" 
+                placeholder="🔍 Buscar por nombre, congregación o título..."
+                value={filtroSalidas.busqueda}
+                onChange={(e) => setFiltroSalidas({ ...filtroSalidas, busqueda: e.target.value })}
+                style={{ flex: 2 }}
+              />
+              <select 
+                value={filtroSalidas.mes}
+                onChange={(e) => setFiltroSalidas({ ...filtroSalidas, mes: e.target.value })}
+              >
+                <option value="">Todos los meses</option>
+                {mesesDisponibles().map(mes => (
+                  <option key={mes} value={mes}>
+                    {new Date(mes + '-01').toLocaleString('es', { month: 'long', year: 'numeric' })}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {loading ? <div className="rd-empty">Cargando registro…</div> :
-              salidasList.length === 0 ? <div className="rd-empty">Aún no hay salidas registradas. Llena el formulario de arriba para comenzar.</div> :
+              salidasList.length === 0 ? <div className="rd-empty">Aún no hay salidas registradas o no coinciden con los filtros.</div> :
               salidasList.map((e) => (
                 <div className="rd-row" key={e.id}>
                   <div className="rd-row-main">
-                    <div className="rd-row-name">{e.discursante} {e.turno ? <span className="rd-turno-badge">Turno {e.turno}</span> : null}</div>
+                    <div className="rd-row-name">
+                      {e.discursante}
+                      {e.turno && (
+                        <span className="rd-turno-badge" style={{ fontSize: '13px', marginLeft: '8px' }}>
+                          🎯 Turno {e.turno}
+                        </span>
+                      )}
+                    </div>
                     <div className="rd-row-sub">{e.discursoNum ? `#${e.discursoNum} — ` : ''}{e.discursoTitulo || 'Sin discurso especificado'}{e.congregacion ? ` · a ${e.congregacion}` : ''}</div>
                   </div>
                   <span className="rd-stamp">{fechaLegible(e.fecha)}</span>
-                  {confirmId === e.id ? (
-                    <div className="rd-confirm">
-                      <span className="rd-confirm-text">¿Eliminar?</span>
-                      <button className="rd-confirm-btn" style={{ background: 'var(--danger)', color: '#fff' }} onClick={() => handleDelete('salidas', e.id)}>Sí</button>
-                      <button className="rd-confirm-btn" style={{ background: 'var(--surface-2)', color: 'var(--ink-soft)' }} onClick={() => setConfirmId(null)}>No</button>
-                    </div>
-                  ) : <button className="rd-btn-icon" onClick={() => setConfirmId(e.id)} title="Eliminar"><Trash2 size={16} /></button>}
+                  <div style={{ display: 'flex', gap: '4px' }} className="rd-no-print">
+                    <button className="rd-btn-icon" onClick={() => handleEdit('salidas', e)} title="Editar"><Edit2 size={16} /></button>
+                    {confirmId === e.id ? (
+                      <div className="rd-confirm">
+                        <span className="rd-confirm-text">¿Eliminar?</span>
+                        <button className="rd-confirm-btn" style={{ background: 'var(--danger)', color: '#fff' }} onClick={() => handleDelete('salidas', e.id)}>Sí</button>
+                        <button className="rd-confirm-btn" style={{ background: 'var(--surface-2)', color: 'var(--ink-soft)' }} onClick={() => setConfirmId(null)}>No</button>
+                      </div>
+                    ) : <button className="rd-btn-icon" onClick={() => setConfirmId(e.id)} title="Eliminar"><Trash2 size={16} /></button>}
+                  </div>
                 </div>
               ))
             }
           </>
-        ) : (
+        ) : tab === 'visitas' ? (
           <>
-            <div className="rd-card">
+            <div className="rd-card rd-no-print">
               <div className="rd-field-row">
                 <div className="rd-field">
                   <label className="rd-label" htmlFor="v-fecha">Fecha</label>
@@ -626,14 +1098,47 @@ export default function RegistroDiscursantesPaloSolo() {
                   <datalist id="congs2">{CONGREGACIONES_SUGERIDAS.map((c) => <option key={c} value={c} />)}</datalist>
                 </div>
               </div>
-              <button className="rd-btn-primary sage" onClick={handleRegistrarVisita} disabled={!visitaForm.nombre.trim() || saving}>
-                <LogIn size={18} /> Registrar visita
-              </button>
+              
+              {editingId ? (
+                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                  <button className="rd-btn-primary sage" onClick={handleUpdateVisita} disabled={!visitaForm.nombre.trim() || saving}>
+                    <Check size={18} /> Actualizar visita
+                  </button>
+                  <button className="rd-btn-secondary" onClick={handleCancelEdit} disabled={saving}>
+                    <X size={18} /> Cancelar
+                  </button>
+                </div>
+              ) : (
+                <button className="rd-btn-primary sage" onClick={handleRegistrarVisita} disabled={!visitaForm.nombre.trim() || saving}>
+                  <LogIn size={18} /> Registrar visita
+                </button>
+              )}
               {saving && <div className="rd-saving">Guardando…</div>}
             </div>
 
+            <div className="rd-filtros rd-no-print">
+              <input 
+                type="text" 
+                placeholder="🔍 Buscar por nombre, congregación o título..."
+                value={filtroVisitas.busqueda}
+                onChange={(e) => setFiltroVisitas({ ...filtroVisitas, busqueda: e.target.value })}
+                style={{ flex: 2 }}
+              />
+              <select 
+                value={filtroVisitas.mes}
+                onChange={(e) => setFiltroVisitas({ ...filtroVisitas, mes: e.target.value })}
+              >
+                <option value="">Todos los meses</option>
+                {mesesDisponibles().map(mes => (
+                  <option key={mes} value={mes}>
+                    {new Date(mes + '-01').toLocaleString('es', { month: 'long', year: 'numeric' })}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {loading ? <div className="rd-empty">Cargando registro…</div> :
-              visitasList.length === 0 ? <div className="rd-empty">Aún no hay visitas registradas. Llena el formulario de arriba para comenzar.</div> :
+              visitasList.length === 0 ? <div className="rd-empty">Aún no hay visitas registradas o no coinciden con los filtros.</div> :
               visitasList.map((e) => (
                 <div className="rd-row" key={e.id}>
                   <div className="rd-row-main">
@@ -641,21 +1146,169 @@ export default function RegistroDiscursantesPaloSolo() {
                     <div className="rd-row-sub">{e.discursoNum ? `#${e.discursoNum} — ` : ''}{e.discursoTitulo}{e.congregacion ? ` · de ${e.congregacion}` : ''}</div>
                   </div>
                   <span className="rd-stamp">{fechaLegible(e.fecha)}</span>
-                  {confirmId === e.id ? (
-                    <div className="rd-confirm">
-                      <span className="rd-confirm-text">¿Eliminar?</span>
-                      <button className="rd-confirm-btn" style={{ background: 'var(--danger)', color: '#fff' }} onClick={() => handleDelete('visitas', e.id)}>Sí</button>
-                      <button className="rd-confirm-btn" style={{ background: 'var(--surface-2)', color: 'var(--ink-soft)' }} onClick={() => setConfirmId(null)}>No</button>
-                    </div>
-                  ) : <button className="rd-btn-icon" onClick={() => setConfirmId(e.id)} title="Eliminar"><Trash2 size={16} /></button>}
+                  <div style={{ display: 'flex', gap: '4px' }} className="rd-no-print">
+                    <button className="rd-btn-icon" onClick={() => handleEdit('visitas', e)} title="Editar"><Edit2 size={16} /></button>
+                    {confirmId === e.id ? (
+                      <div className="rd-confirm">
+                        <span className="rd-confirm-text">¿Eliminar?</span>
+                        <button className="rd-confirm-btn" style={{ background: 'var(--danger)', color: '#fff' }} onClick={() => handleDelete('visitas', e.id)}>Sí</button>
+                        <button className="rd-confirm-btn" style={{ background: 'var(--surface-2)', color: 'var(--ink-soft)' }} onClick={() => setConfirmId(null)}>No</button>
+                      </div>
+                    ) : <button className="rd-btn-icon" onClick={() => setConfirmId(e.id)} title="Eliminar"><Trash2 size={16} /></button>}
+                  </div>
                 </div>
               ))
             }
           </>
-        )}
+        ) : tab === 'calendario' ? (
+          <div className="rd-card">
+            <div style={{ fontWeight: '600', fontSize: '16px', marginBottom: '12px' }}>
+              📅 Calendario de próximas fechas
+            </div>
+            
+            {obtenerProximosSabados(8).map((fecha) => {
+              const salida = obtenerDiscursanteProgramado(fecha, data.salidas);
+              const visita = obtenerVisitaProgramada(fecha, data.visitas);
+              const fechaObj = new Date(fecha + 'T00:00:00');
+              const mes = fechaObj.toLocaleString('es', { month: 'long' });
+              const dia = fechaObj.getDate();
+              
+              return (
+                <div key={fecha} className="rd-calendario-item">
+                  <div style={{ 
+                    minWidth: '80px',
+                    fontWeight: '700',
+                    fontSize: '15px',
+                    color: 'var(--sage-dark)'
+                  }}>
+                    {dia} {mes.slice(0, 3)}
+                  </div>
+                  
+                  <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                    {salida ? (
+                      <>
+                        <span style={{ 
+                          background: 'var(--amber-tint)', 
+                          padding: '4px 10px', 
+                          borderRadius: '6px',
+                          fontSize: '13px',
+                          fontWeight: '600',
+                          color: 'var(--amber-dark)'
+                        }}>
+                          🚀 Sale: {salida.discursante}
+                        </span>
+                        {salida.discursoNum && (
+                          <span style={{ fontSize: '12px', color: 'var(--ink-soft)' }}>
+                            #{salida.discursoNum}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span style={{ fontSize: '13px', color: 'var(--ink-faint)' }}>
+                        ⏳ Sin salida programada
+                      </span>
+                    )}
+                  </div>
+                  
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    {visita ? (
+                      <span style={{ 
+                        background: 'var(--sage-tint)', 
+                        padding: '4px 10px', 
+                        borderRadius: '6px',
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        color: 'var(--sage-dark)'
+                      }}>
+                        👤 Visita: {visita.nombre}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: '12px', color: 'var(--ink-faint)' }}>
+                        Sin visita
+                      </span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : tab === 'estadisticas' ? (
+          <div className="rd-card">
+            <div style={{ fontWeight: '600', fontSize: '16px', marginBottom: '12px' }}>
+              📊 Resumen de registros
+            </div>
+            
+            <div className="rd-estadisticas-grid">
+              <div className="rd-estadisticas-card" style={{ background: 'var(--amber-tint)' }}>
+                <div className="rd-estadisticas-numero" style={{ color: 'var(--amber-dark)' }}>{data.salidas.length}</div>
+                <div className="rd-estadisticas-label">Salidas totales</div>
+              </div>
+              <div className="rd-estadisticas-card" style={{ background: 'var(--sage-tint)' }}>
+                <div className="rd-estadisticas-numero" style={{ color: 'var(--sage-dark)' }}>{data.visitas.length}</div>
+                <div className="rd-estadisticas-label">Visitas recibidas</div>
+              </div>
+              <div className="rd-estadisticas-card" style={{ background: 'var(--surface-2)', border: '1px solid var(--line)' }}>
+                <div className="rd-estadisticas-numero" style={{ color: 'var(--ink)' }}>{data.salidas.length + data.visitas.length}</div>
+                <div className="rd-estadisticas-label">Total de movimientos</div>
+              </div>
+            </div>
 
-        <div className="rd-footer">
+            {data.salidas.length > 0 && (
+              <>
+                <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px' }}>
+                  📆 Salidas por mes
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(() => {
+                    const meses = {};
+                    data.salidas.forEach(s => {
+                      const mes = s.fecha.slice(0, 7);
+                      meses[mes] = (meses[mes] || 0) + 1;
+                    });
+                    const mesesOrdenados = Object.keys(meses).sort();
+                    return mesesOrdenados.map(mes => {
+                      const fechaObj = new Date(mes + '-01');
+                      const nombreMes = fechaObj.toLocaleString('es', { month: 'long', year: 'numeric' });
+                      return (
+                        <div key={mes} className="rd-meses-item">
+                          <span>{nombreMes}</span>
+                          <span style={{ fontWeight: '600' }}>{meses[mes]} salida{meses[mes] > 1 ? 's' : ''}</span>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              </>
+            )}
+
+            {data.salidas.length > 0 && (
+              <>
+                <div style={{ fontWeight: '600', fontSize: '14px', marginBottom: '8px', marginTop: '16px' }}>
+                  👥 Discursantes más activos
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {(() => {
+                    const conteo = {};
+                    data.salidas.forEach(s => {
+                      conteo[s.discursante] = (conteo[s.discursante] || 0) + 1;
+                    });
+                    const ordenados = Object.entries(conteo).sort((a, b) => b[1] - a[1]);
+                    return ordenados.map(([nombre, cantidad]) => (
+                      <div key={nombre} className="rd-meses-item">
+                        <span>{nombre}</span>
+                        <span style={{ fontWeight: '600' }}>{cantidad} salida{cantidad > 1 ? 's' : ''}</span>
+                      </div>
+                    ));
+                  })()}
+                </div>
+              </>
+            )}
+          </div>
+        ) : null}
+
+        <div className="rd-footer rd-no-print">
           <button className="rd-btn-download" onClick={handleDescargar}><Download size={17} /> Descargar Excel</button>
+          <button className="rd-btn-pdf" onClick={handleExportarPDF}><FileText size={17} /> Exportar a PDF</button>
         </div>
       </div>
     </div>
